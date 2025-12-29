@@ -46,13 +46,10 @@ messaging = [
 mongo = [
     "pymongo!=3.1,>=3.0.2", # Apache-2.0
 ]
+# pf9 start
 otlp = [
-    "opentelemetry-exporter-otlp>=1.16.0", #Apache-2.0
-    "opentelemetry-sdk>=1.16.0", # Apache-2.0
-]
-# pf9 start: gRPC exporter for pf9_otel driver
-pf9_otel = [
-    "opentelemetry-exporter-otlp-proto-grpc>=1.16.0", # Apache-2.0
+    "opentelemetry-exporter-otlp>=1.16.0", # Apache-2.0 (HTTP)
+    "opentelemetry-exporter-otlp-proto-grpc>=1.16.0", # Apache-2.0 (gRPC)
     "opentelemetry-sdk>=1.16.0", # Apache-2.0
 ]
 # pf9 end

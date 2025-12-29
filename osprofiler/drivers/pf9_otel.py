@@ -1,4 +1,4 @@
-# Copyright 2024 Platform9 Systems, Inc.
+# Copyright 2025 Platform9 Systems, Inc.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -12,11 +12,6 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-
-# pf9 start: Platform9 OTel driver for eventlet-compatible distributed tracing
-# This driver uses gRPC exporter and SimpleSpanProcessor for compatibility
-# with OpenStack's eventlet-based services.
-# pf9 end
 
 """Platform9 OpenTelemetry driver for eventlet-compatible tracing.
 
@@ -54,8 +49,7 @@ class PF9OTel(base.Driver):
                          conf=conf, **kwargs)
         try:
             from opentelemetry import trace as trace_api
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-                OTLPSpanExporter)
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter # noqa
             from opentelemetry.sdk.resources import Resource
             from opentelemetry.sdk.trace import TracerProvider
             from opentelemetry.sdk.trace.export import SimpleSpanProcessor
