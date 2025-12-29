@@ -63,10 +63,9 @@ sqlalchemy = [
 [project.scripts]
 osprofiler = "osprofiler.cmd.shell:main"
 
-[tool.setuptools]
-packages = [
-    "osprofiler"
-]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["osprofiler*"]
 
 [tool.bandit]
 exclude_dirs = ["tests"]

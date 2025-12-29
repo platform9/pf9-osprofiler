@@ -90,7 +90,7 @@ class PF9OTel(base.Driver):
 
     @classmethod
     def get_name(cls):
-        return "pf9_otel"
+        return "pf9otel"
 
     def _kind(self, name):
         if "wsgi" in name:
