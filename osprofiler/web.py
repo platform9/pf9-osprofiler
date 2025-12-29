@@ -13,6 +13,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import re
+import uuid
+
 import webob.dec
 
 from osprofiler import _utils as utils
@@ -30,63 +33,113 @@ X_TRACE_INFO = "X-Trace-Info"
 #: Http header that will contain the traces data hmac (that will be validated).
 X_TRACE_HMAC = "X-Trace-HMAC"
 
+# pf9 start: W3C Trace Context support for distributed tracing
+W3C_TRACEPARENT = "traceparent"
+
+_W3C_TRACEPARENT_RE = re.compile(
+    r'^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$'
+)
+
+
+def extract_w3c_context(headers):
+    """Extract W3C trace context from request headers."""
+    traceparent = headers.get(W3C_TRACEPARENT) or headers.get('Traceparent')
+    if not traceparent:
+        return None, None
+    match = _W3C_TRACEPARENT_RE.match(traceparent.lower())
+    if match:
+        version, trace_id, parent_id, flags = match.groups()
+        if version == "00":
+            return trace_id, parent_id
+    return None, None
+
+
+def generate_traceparent(trace_id=None, parent_id=None, sampled=True):
+    """Generate W3C traceparent header."""
+    if trace_id is None:
+        trace_id = uuid.uuid4().hex
+    if parent_id is None:
+        parent_id = uuid.uuid4().hex[:16]
+    flags = "01" if sampled else "00"
+    return "00-{}-{}-{}".format(trace_id, parent_id, flags)
+
 
 def get_trace_id_headers():
-    """Adds the trace id headers (and any hmac) into provided dictionary."""
+    """Get trace headers for outgoing requests."""
     p = profiler.get()
-    if p and p.hmac_key:
-        data = {"base_id": p.get_base_id(), "parent_id": p.get_id()}
-        pack = utils.signed_pack(data, p.hmac_key)
-        return {
-            X_TRACE_INFO: pack[0],
-            X_TRACE_HMAC: pack[1]
-        }
+    if p:
+        headers = {}
+        # Add W3C traceparent
+        base_id = p.get_base_id().replace("-", "")
+        span_id = format(utils.shorten_id(p.get_id()), '016x')
+        headers[W3C_TRACEPARENT] = generate_traceparent(base_id, span_id)
+
+        if p.hmac_key:
+            data = {"base_id": p.get_base_id(), "parent_id": p.get_id()}
+            pack = utils.signed_pack(data, p.hmac_key)
+            headers[X_TRACE_INFO] = pack[0]
+            headers[X_TRACE_HMAC] = pack[1]
+        return headers
     return {}
+# pf9 end
 
 
 _ENABLED = None
 _HMAC_KEYS = None
+# pf9 start: always_on mode
+_ALWAYS_ON = None
 
 
 def disable():
-    """Disable middleware.
-
-    This is the alternative way to disable middleware. It will be used to be
-    able to disable middleware via oslo.config.
-    """
+    """Disable middleware."""
     global _ENABLED
     _ENABLED = False
 
 
-def enable(hmac_keys=None):
-    """Enable middleware."""
-    global _ENABLED, _HMAC_KEYS
+def enable(hmac_keys=None, always_on=False):
+    """Enable middleware.
+
+    :param hmac_keys: Comma-separated HMAC keys for traditional tracing.
+    :param always_on: If True, trace all requests without requiring HMAC.
+                      Sampling should be configured in the OTel Collector.
+    """
+    global _ENABLED, _HMAC_KEYS, _ALWAYS_ON
     _ENABLED = True
     _HMAC_KEYS = utils.split(hmac_keys or "")
+    _ALWAYS_ON = always_on
 
 
+def _str_to_bool(value):
+    """Convert string to boolean (for paste.deploy config)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).lower() in ('true', '1', 'yes', 'on')
+# pf9 end
+
+
+# pf9 start: WsgiMiddleware always_on support
 class WsgiMiddleware:
     """WSGI Middleware that enables tracing for an application."""
 
-    def __init__(self, application, hmac_keys=None, enabled=False, **kwargs):
+    def __init__(self, application, hmac_keys=None, enabled=False,
+                 always_on=False, **kwargs):
         """Initialize middleware with api-paste.ini arguments.
 
-        :application: wsgi app
-        :hmac_keys: Only trace header that was signed with one of these
-                    hmac keys will be processed. This limitation is
-                    essential, because it allows to profile OpenStack
-                    by only those who knows this key which helps
-                    avoid DDOS.
-        :enabled: This middleware can be turned off fully if enabled is False.
-        :kwargs: Other keyword arguments.
-                 NOTE(tovin07): Currently, this `kwargs` is not used at all.
-                 It's here to avoid some extra keyword arguments in local_conf
-                 that cause `__init__() got an unexpected keyword argument`.
+        :param application: wsgi app
+        :param hmac_keys: Only trace header signed with these keys will be
+                          processed.
+        :param enabled: Enable/disable middleware.
+        :param always_on: If True, trace all requests without requiring HMAC.
+                          Sampling should be configured in the OTel Collector.
+        :param kwargs: Other keyword arguments (ignored).
         """
         self.application = application
         self.name = "wsgi"
-        self.enabled = enabled
+        self.enabled = _str_to_bool(enabled)
         self.hmac_keys = utils.split(hmac_keys or "")
+        self.always_on = _str_to_bool(always_on)
 
     @classmethod
     def factory(cls, global_conf, **local_conf):
@@ -104,20 +157,63 @@ class WsgiMiddleware:
             return False
         return True
 
+    def _get_always_on(self):
+        """Get effective always_on setting (global overrides instance)."""
+        if _ALWAYS_ON is not None:
+            return _ALWAYS_ON
+        return self.always_on
+
+    def _handle_always_on_trace(self, request):
+        """Handle tracing in always-on mode.
+
+        Returns:
+            Tuple of (trace_id, parent_id). Always traces
+        """
+        trace_id, parent_id = extract_w3c_context(request.headers)
+
+        if trace_id:
+            return trace_id, parent_id
+
+        return uuid.uuid4().hex, None
+
     @webob.dec.wsgify
     def __call__(self, request):
         if (_ENABLED is not None and not _ENABLED
                 or _ENABLED is None and not self.enabled):
             return request.get_response(self.application)
 
-        trace_info = utils.signed_unpack(request.headers.get(X_TRACE_INFO),
-                                         request.headers.get(X_TRACE_HMAC),
-                                         _HMAC_KEYS or self.hmac_keys)
+        if self._get_always_on():
+            trace_id, parent_id = self._handle_always_on_trace(request)
 
-        if not self._trace_is_valid(trace_info):
-            return request.get_response(self.application)
+            base_id = "{}-{}-{}-{}-{}".format(
+                trace_id[:8], trace_id[8:12], trace_id[12:16],
+                trace_id[16:20], trace_id[20:])
+            if parent_id:
+                parent_uuid = parent_id
+            else:
+                parent_uuid = base_id
 
-        profiler.init(**trace_info)
+            profiler.init(hmac_key=None, base_id=base_id, parent_id=parent_uuid)
+        else:
+            trace_info = utils.signed_unpack(request.headers.get(X_TRACE_INFO),
+                                             request.headers.get(X_TRACE_HMAC),
+                                             _HMAC_KEYS or self.hmac_keys)
+
+            if not self._trace_is_valid(trace_info):
+                return request.get_response(self.application)
+
+            # pf9 start: Use W3C trace context for correlation
+            w3c_trace_id, w3c_parent_id = extract_w3c_context(request.headers)
+            if w3c_trace_id:
+                trace_info["base_id"] = "{}-{}-{}-{}-{}".format(
+                    w3c_trace_id[:8], w3c_trace_id[8:12], w3c_trace_id[12:16],
+                    w3c_trace_id[16:20], w3c_trace_id[20:])
+                if w3c_parent_id:
+                    trace_info["parent_id"] = w3c_parent_id
+            # pf9 end
+
+            profiler.init(**trace_info)
+
         info = {
             "request": {
                 "path": request.path,
@@ -131,3 +227,4 @@ class WsgiMiddleware:
                 return request.get_response(self.application)
         finally:
             profiler.clean()
+# pf9 end

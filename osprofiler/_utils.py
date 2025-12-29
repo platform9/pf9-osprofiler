@@ -150,17 +150,30 @@ def import_modules_from_package(package):
             __import__(module_name)
 
 
+# pf9 start: shorten_id for W3C traceparent span IDs
 def shorten_id(span_id):
-    """Convert from uuid4 to 64 bit id for OpenTracing"""
+    """Convert from uuid4 to 64 bit id for OpenTracing
+
+    Handles W3C traceparent 16-char span IDs and osprofiler UUIDs.
+
+    :param span_id: Span ID in any supported format
+    :returns: 64-bit integer span ID
+    """
     int64_max = (1 << 64) - 1
     if isinstance(span_id, int):
         return span_id & int64_max
+    if isinstance(span_id, str):
+        hex_id = span_id.replace("-", "")
+        if len(hex_id) in (16, 32):
+            try:
+                return int(hex_id, 16) & int64_max
+            except ValueError:
+                pass
     try:
-        short_id = uuid.UUID(span_id).int & int64_max
+        return uuid.UUID(span_id).int & int64_max
     except ValueError:
-        # Return a new short id for this
-        short_id = shorten_id(uuidutils.generate_uuid())
-    return short_id
+        return shorten_id(uuidutils.generate_uuid())
+# pf9 end
 
 
 def uuid_to_int128(span_uuid):
