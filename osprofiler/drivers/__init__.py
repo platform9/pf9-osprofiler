@@ -7,3 +7,6 @@ from osprofiler.drivers import messaging  # noqa
 from osprofiler.drivers import mongodb  # noqa
 from osprofiler.drivers import redis_driver  # noqa
 from osprofiler.drivers import sqlalchemy_driver  # noqa
+# pf9 start: Platform9 OTel driver for eventlet compatibility
+from osprofiler.drivers import pf9_otel  # noqa
+# pf9 end
