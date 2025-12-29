@@ -173,6 +173,22 @@ Possible values:
 * False: Disable the filter.
 """)
 
+# pf9 start: always_on config option for automatic tracing
+_always_on_opt = cfg.BoolOpt(
+    "always_on",
+    default=False,
+    help="""
+Enable tracing for all requests without requiring HMAC headers.
+
+Default value is False (require HMAC for tracing).
+
+Possible values:
+
+* True: Trace all requests (sampling handled by OTel Collector).
+* False: Require X-Trace-Info header with valid HMAC to enable tracing.
+""")
+# pf9 end
+
 _PROFILER_OPTS = [
     _enabled_opt,
     _trace_sqlalchemy_opt,
@@ -184,7 +200,8 @@ _PROFILER_OPTS = [
     _es_scroll_size_opt,
     _socket_timeout_opt,
     _sentinel_service_name_opt,
-    _filter_error_trace
+    _filter_error_trace,
+    _always_on_opt,  # pf9: always_on config option
 ]
 
 cfg.CONF.register_opts(_PROFILER_OPTS, group=_profiler_opt_group)
@@ -234,10 +251,12 @@ _OTLP_OPTS = [
 cfg.CONF.register_opts(_OTLP_OPTS, group=_otlp_profiler_opt_group)
 
 
+# pf9 start: set_defaults with always_on parameter
 def set_defaults(conf, enabled=None, trace_sqlalchemy=None, hmac_keys=None,
                  connection_string=None, es_doc_type=None,
                  es_scroll_time=None, es_scroll_size=None,
-                 socket_timeout=None, sentinel_service_name=None):
+                 socket_timeout=None, sentinel_service_name=None,
+                 always_on=None):
     conf.register_opts(_PROFILER_OPTS, group=_profiler_opt_group)
 
     if enabled is not None:
@@ -274,6 +293,11 @@ def set_defaults(conf, enabled=None, trace_sqlalchemy=None, hmac_keys=None,
         conf.set_default("sentinel_service_name", sentinel_service_name,
                          group=_profiler_opt_group.name)
 
+    if always_on is not None:
+        conf.set_default("always_on", always_on,
+                         group=_profiler_opt_group.name)
+# pf9 end
+
 
 def is_trace_enabled(conf=None):
     if conf is None:
@@ -287,11 +311,23 @@ def is_db_trace_enabled(conf=None):
     return conf.profiler.enabled and conf.profiler.trace_sqlalchemy
 
 
+# pf9 start: is_always_on_enabled and enable_web_trace with always_on
+def is_always_on_enabled(conf=None):
+    """Check if always-on tracing mode is enabled."""
+    if conf is None:
+        conf = cfg.CONF
+    return conf.profiler.enabled and conf.profiler.always_on
+
+
 def enable_web_trace(conf=None):
     if conf is None:
         conf = cfg.CONF
     if conf.profiler.enabled:
-        web.enable(conf.profiler.hmac_keys)
+        web.enable(
+            hmac_keys=conf.profiler.hmac_keys,
+            always_on=conf.profiler.always_on
+        )
+# pf9 end
 
 
 def disable_web_trace(conf=None):
