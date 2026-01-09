@@ -44,13 +44,15 @@ class WebTestCase(test.TestCase):
         profiler.init("key", base_id="y", parent_id="z")
         headers = web.get_trace_id_headers()
         self.assertEqual(sorted(headers.keys()),
-                         sorted(["X-Trace-Info", "X-Trace-HMAC"]))
+                         sorted(["X-Trace-Info", "X-Trace-HMAC", "traceparent"]))
 
         trace_info = utils.signed_unpack(headers["X-Trace-Info"],
                                          headers["X-Trace-HMAC"], ["key"])
         self.assertIn("hmac_key", trace_info)
         self.assertEqual("key", trace_info.pop("hmac_key"))
         self.assertEqual({"parent_id": "z", "base_id": "y"}, trace_info)
+        # Verify traceparent format: 00-{trace_id}-{span_id}-{flags}
+        self.assertTrue(headers["traceparent"].startswith("00-"))
 
     @mock.patch("osprofiler.profiler.get")
     def test_get_trace_id_headers_no_profiler(self, mock_get_profiler):

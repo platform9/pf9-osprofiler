@@ -67,18 +67,17 @@ def generate_traceparent(trace_id=None, parent_id=None, sampled=True):
 def get_trace_id_headers():
     """Get trace headers for outgoing requests."""
     p = profiler.get()
-    if p:
+    if p and p.hmac_key:
         headers = {}
-        # Add W3C traceparent
+        # pf9: Add W3C traceparent for cross-service correlation
         base_id = p.get_base_id().replace("-", "")
         span_id = format(utils.shorten_id(p.get_id()), '016x')
         headers[W3C_TRACEPARENT] = generate_traceparent(base_id, span_id)
 
-        if p.hmac_key:
-            data = {"base_id": p.get_base_id(), "parent_id": p.get_id()}
-            pack = utils.signed_pack(data, p.hmac_key)
-            headers[X_TRACE_INFO] = pack[0]
-            headers[X_TRACE_HMAC] = pack[1]
+        data = {"base_id": p.get_base_id(), "parent_id": p.get_id()}
+        pack = utils.signed_pack(data, p.hmac_key)
+        headers[X_TRACE_INFO] = pack[0]
+        headers[X_TRACE_HMAC] = pack[1]
         return headers
     return {}
 # pf9 end
@@ -86,8 +85,6 @@ def get_trace_id_headers():
 
 _ENABLED = None
 _HMAC_KEYS = None
-# pf9 start: always_on mode
-_ALWAYS_ON = None
 
 
 def disable():
@@ -96,50 +93,42 @@ def disable():
     _ENABLED = False
 
 
-def enable(hmac_keys=None, always_on=False):
+def enable(hmac_keys=None):
     """Enable middleware.
 
     :param hmac_keys: Comma-separated HMAC keys for traditional tracing.
-    :param always_on: If True, trace all requests without requiring HMAC.
-                      Sampling should be configured in the OTel Collector.
     """
-    global _ENABLED, _HMAC_KEYS, _ALWAYS_ON
+    global _ENABLED, _HMAC_KEYS
     _ENABLED = True
     _HMAC_KEYS = utils.split(hmac_keys or "")
-    _ALWAYS_ON = always_on
 
 
-def _str_to_bool(value):
-    """Convert string to boolean (for paste.deploy config)."""
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    return str(value).lower() in ('true', '1', 'yes', 'on')
-# pf9 end
-
-
-# pf9 start: WsgiMiddleware always_on support
+# pf9 start: WsgiMiddleware with W3C traceparent support
 class WsgiMiddleware:
     """WSGI Middleware that enables tracing for an application."""
 
-    def __init__(self, application, hmac_keys=None, enabled=False,
-                 always_on=False, **kwargs):
+    def __init__(self, application, hmac_keys=None, enabled=False, **kwargs):
         """Initialize middleware with api-paste.ini arguments.
 
         :param application: wsgi app
         :param hmac_keys: Only trace header signed with these keys will be
                           processed.
         :param enabled: Enable/disable middleware.
-        :param always_on: If True, trace all requests without requiring HMAC.
-                          Sampling should be configured in the OTel Collector.
         :param kwargs: Other keyword arguments (ignored).
         """
         self.application = application
         self.name = "wsgi"
-        self.enabled = _str_to_bool(enabled)
+        self.enabled = self._str_to_bool(enabled)
         self.hmac_keys = utils.split(hmac_keys or "")
-        self.always_on = _str_to_bool(always_on)
+
+    @staticmethod
+    def _str_to_bool(value):
+        """Convert string to boolean (for paste.deploy config)."""
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).lower() in ('true', '1', 'yes', 'on')
 
     @classmethod
     def factory(cls, global_conf, **local_conf):
@@ -157,62 +146,29 @@ class WsgiMiddleware:
             return False
         return True
 
-    def _get_always_on(self):
-        """Get effective always_on setting (global overrides instance)."""
-        if _ALWAYS_ON is not None:
-            return _ALWAYS_ON
-        return self.always_on
-
-    def _handle_always_on_trace(self, request):
-        """Handle tracing in always-on mode.
-
-        Returns:
-            Tuple of (trace_id, parent_id). Always traces
-        """
-        trace_id, parent_id = extract_w3c_context(request.headers)
-
-        if trace_id:
-            return trace_id, parent_id
-
-        return uuid.uuid4().hex, None
-
     @webob.dec.wsgify
     def __call__(self, request):
         if (_ENABLED is not None and not _ENABLED
                 or _ENABLED is None and not self.enabled):
             return request.get_response(self.application)
 
-        if self._get_always_on():
-            trace_id, parent_id = self._handle_always_on_trace(request)
+        trace_info = utils.signed_unpack(request.headers.get(X_TRACE_INFO),
+                                         request.headers.get(X_TRACE_HMAC),
+                                         _HMAC_KEYS or self.hmac_keys)
 
-            base_id = "{}-{}-{}-{}-{}".format(
-                trace_id[:8], trace_id[8:12], trace_id[12:16],
-                trace_id[16:20], trace_id[20:])
-            if parent_id:
-                parent_uuid = parent_id
-            else:
-                parent_uuid = base_id
+        if not self._trace_is_valid(trace_info):
+            return request.get_response(self.application)
 
-            profiler.init(hmac_key=None, base_id=base_id, parent_id=parent_uuid)
-        else:
-            trace_info = utils.signed_unpack(request.headers.get(X_TRACE_INFO),
-                                             request.headers.get(X_TRACE_HMAC),
-                                             _HMAC_KEYS or self.hmac_keys)
+        # Use W3C trace context for cross-service correlation
+        w3c_trace_id, w3c_parent_id = extract_w3c_context(request.headers)
+        if w3c_trace_id:
+            trace_info["base_id"] = "{}-{}-{}-{}-{}".format(
+                w3c_trace_id[:8], w3c_trace_id[8:12], w3c_trace_id[12:16],
+                w3c_trace_id[16:20], w3c_trace_id[20:])
+            if w3c_parent_id:
+                trace_info["parent_id"] = w3c_parent_id
 
-            if not self._trace_is_valid(trace_info):
-                return request.get_response(self.application)
-
-            # pf9 start: Use W3C trace context for correlation
-            w3c_trace_id, w3c_parent_id = extract_w3c_context(request.headers)
-            if w3c_trace_id:
-                trace_info["base_id"] = "{}-{}-{}-{}-{}".format(
-                    w3c_trace_id[:8], w3c_trace_id[8:12], w3c_trace_id[12:16],
-                    w3c_trace_id[16:20], w3c_trace_id[20:])
-                if w3c_parent_id:
-                    trace_info["parent_id"] = w3c_parent_id
-            # pf9 end
-
-            profiler.init(**trace_info)
+        profiler.init(**trace_info)
 
         info = {
             "request": {

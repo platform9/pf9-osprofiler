@@ -62,5 +62,5 @@ class ConfigTestCase(test.TestCase):
                           hmac_keys="MY_KEY")
         opts.enable_web_trace(self.conf_fixture.conf)
         opts.disable_web_trace(self.conf_fixture.conf)
-        mock_enable.assert_called_once_with("MY_KEY")
+        mock_enable.assert_called_once_with(hmac_keys="MY_KEY")
         mock_disable.assert_called_once_with()

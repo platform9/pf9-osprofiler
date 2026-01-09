@@ -33,11 +33,12 @@ class OTLP(base.Driver):
                          conf=conf, **kwargs)
         try:
             from opentelemetry import trace as trace_api
-
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # noqa
+            # pf9 start: Use gRPC exporter and SimpleSpanProcessor for eventlet compatibility
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter  # noqa
             from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
             from opentelemetry.sdk.trace import TracerProvider
+            # pf9 end
 
             self.trace_api = trace_api
         except ImportError:
@@ -53,18 +54,22 @@ class OTLP(base.Driver):
             "service.name": service_name
         })
 
+        # pf9 start: gRPC endpoint format host:port
         parsed_url = parser.urlparse(connection_str)
-        # TODO("sahid"): We also want to handle https scheme?
-        parsed_url = parsed_url._replace(scheme="http")
+        endpoint = "{}:{}".format(
+            parsed_url.hostname or "localhost",
+            parsed_url.port or 4317)
+        # pf9 end
 
         self.trace_api.set_tracer_provider(
             TracerProvider(resource=resource))
         self.tracer = self.trace_api.get_tracer(__name__)
 
-        exporter = OTLPSpanExporter("{}/v1/traces".format(
-            parsed_url.geturl()))
+        # pf9 start: Use gRPC exporter with SimpleSpanProcessor
+        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
         self.trace_api.get_tracer_provider().add_span_processor(
-            BatchSpanProcessor(exporter))
+            SimpleSpanProcessor(exporter))
+        # pf9 end
 
         self.spans = collections.deque()
 
