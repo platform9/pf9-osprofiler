@@ -39,11 +39,6 @@ def init_from_conf(conf, context, project, service, host, **kwargs):
         conf=conf,
         **kwargs)
     notifier.set(_notifier)
-    # pf9 start: Enable always_on mode for automatic tracing
-    web.enable(
-        hmac_keys=conf.profiler.hmac_keys,
-        always_on=conf.profiler.always_on
-    )
-    # pf9 end
+    web.enable(hmac_keys=conf.profiler.hmac_keys)
     if conf.profiler.trace_requests:
         requests.enable()
