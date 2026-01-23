@@ -66,7 +66,7 @@ class OTLP(base.Driver):
         self.tracer = self.trace_api.get_tracer(__name__)
 
         # pf9 start: Use gRPC exporter with SimpleSpanProcessor
-        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True, timeout=2)
         self.trace_api.get_tracer_provider().add_span_processor(
             SimpleSpanProcessor(exporter))
         # pf9 end
