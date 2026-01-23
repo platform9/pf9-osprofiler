@@ -69,10 +69,11 @@ def get_trace_id_headers():
     p = profiler.get()
     if p and p.hmac_key:
         headers = {}
-        # pf9: Add W3C traceparent for cross-service correlation
-        base_id = p.get_base_id().replace("-", "")
-        span_id = format(utils.shorten_id(p.get_id()), '016x')
-        headers[W3C_TRACEPARENT] = generate_traceparent(base_id, span_id)
+        # pf9: add W3C traceparent 
+        if p.get_id() != p.get_base_id():
+            base_id = p.get_base_id().replace("-", "")
+            span_id = format(utils.shorten_id(p.get_id()), '016x')
+            headers[W3C_TRACEPARENT] = generate_traceparent(base_id, span_id)
 
         data = {"base_id": p.get_base_id(), "parent_id": p.get_id()}
         pack = utils.signed_pack(data, p.hmac_key)
