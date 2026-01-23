@@ -66,7 +66,7 @@ class OTLP(base.Driver):
         self.tracer = self.trace_api.get_tracer(__name__)
 
         # pf9 start: Use gRPC exporter with SimpleSpanProcessor
-        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True, timeout=2)
         self.trace_api.get_tracer_provider().add_span_processor(
             SimpleSpanProcessor(exporter))
         # pf9 end
@@ -145,12 +145,19 @@ class OTLP(base.Driver):
             if payload.get("info", {}).get("requests"):
                 span.set_attribute(
                     "status_code", payload["info"]["requests"]["status_code"])
-            # Span error tag and log
+            # pf9 start: Set span status and error info
             if payload["info"].get("etype"):
                 span.set_attribute("error", True)
+                span.set_status(self.trace_api.Status(
+                    self.trace_api.StatusCode.ERROR,
+                    payload["info"]["message"]))
                 span.add_event("log", {
                     "error.kind": payload["info"]["etype"],
                     "message": payload["info"]["message"]})
+            else:
+                span.set_status(self.trace_api.Status(
+                    self.trace_api.StatusCode.OK))
+            # pf9 end
             span.end()
 
     def get_report(self, base_id):
