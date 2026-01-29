@@ -101,14 +101,12 @@ def handle_error(exception_context):
     exception_class_name = reflection.get_class_name(
         exception_context.original_exception)
     original_exception = str(exception_context.original_exception)
-    chained_exception = str(exception_context.chained_exception)
 
     info = {
         "etype": exception_class_name,
         "message": original_exception,
         "db": {
             "original_exception": original_exception,
-            "chained_exception": chained_exception
         }
     }
     profiler.stop(info=info)
