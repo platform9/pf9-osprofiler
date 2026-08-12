@@ -12,6 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import json
 from unittest import mock
 
 from oslo_config import cfg
@@ -61,13 +62,78 @@ class OTLPTestCase(test.TestCase):
     def test_notify_start(self):
         self.driver.notify(self.payload_start)
         self.assertEqual(1, len(self.driver.spans))
+        self.assertIn(self.payload_start["trace_id"], self.driver.spans)
 
     def test_notify_stop(self):
         mock_end = mock.MagicMock()
         self.driver.notify(self.payload_start)
-        self.driver.spans[0].end = mock_end
+        self.driver.spans[self.payload_start["trace_id"]].end = mock_end
         self.driver.notify(self.payload_stop)
         mock_end.assert_called_once()
+
+    def test_notify_stop_without_start_does_not_raise(self):
+        self.driver.notify(self.payload_stop)
+        self.assertEqual(0, len(self.driver.spans))
+
+    def test_notify_pairs_interleaved_spans_by_trace_id(self):
+        payload_start_a = dict(self.payload_start, trace_id="trace-a")
+        payload_start_b = dict(self.payload_start, trace_id="trace-b")
+        payload_stop_a = dict(self.payload_stop, trace_id="trace-a")
+        payload_stop_b = dict(self.payload_stop, trace_id="trace-b")
+
+        self.driver.notify(payload_start_a)
+        self.driver.notify(payload_start_b)
+
+        end_a = mock.MagicMock()
+        end_b = mock.MagicMock()
+        self.driver.spans["trace-a"].end = end_a
+        self.driver.spans["trace-b"].end = end_b
+
+        self.driver.notify(payload_stop_a)
+        end_a.assert_called_once()
+        end_b.assert_not_called()
+
+        self.driver.notify(payload_stop_b)
+        end_b.assert_called_once()
+
+    def test_name_start_suffix_truncation(self):
+        payload = {"name": "rbac.filter-start", "info": {}}
+        self.assertEqual("rbac.filter", self.driver._name(payload))
+
+    def test_create_span_tags_generic_passthrough(self):
+        payload = {
+            "info": {
+                "host": "test",
+                "rbac": {
+                    "decision": "deny",
+                    "count": 3,
+                    "context": {"project_id": "p1"},
+                },
+            }
+        }
+        tags = self.driver.create_span_tags(payload)
+        self.assertEqual("deny", tags["rbac.decision"])
+        self.assertEqual(3, tags["rbac.count"])
+        self.assertNotIn("host", tags)
+        self.assertEqual({"project_id": "p1"},
+                         json.loads(tags["rbac.context"]))
+
+    def test_create_span_tags_skips_non_dict_namespaces(self):
+        payload = {"info": {"host": "test", "flag": True}}
+        tags = self.driver.create_span_tags(payload)
+        self.assertEqual({}, tags)
+
+    def test_notify_stop_merges_extra_namespace_attributes(self):
+        self.driver.notify(self.payload_start)
+        span = self.driver.spans[self.payload_start["trace_id"]]
+        span.end = mock.MagicMock()
+
+        payload_stop = dict(self.payload_stop)
+        payload_stop["info"] = dict(self.payload_stop["info"])
+        payload_stop["info"]["rbac"] = {"decision": "deny"}
+
+        self.driver.notify(payload_stop)
+        self.assertEqual("deny", span.attributes["rbac.decision"])
 
     def test_service_name_default(self):
         self.assertEqual("pr1-svc1", self.driver._get_service_name(

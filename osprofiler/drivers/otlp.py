@@ -12,7 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import collections
+import logging
 from urllib import parse as parser
 
 from oslo_config import cfg
@@ -21,6 +21,28 @@ from oslo_serialization import jsonutils
 from osprofiler import _utils as utils
 from osprofiler.drivers import base
 from osprofiler import exc
+
+LOG = logging.getLogger(__name__)
+
+
+def _flatten_namespace_tags(info, skip):
+    """Flatten dict-valued namespaces in info into dotted-key tags.
+
+    info["rbac"]["decision"] becomes tags["rbac.decision"]. Namespaces in
+    skip and non-dict values are ignored so this stays generic across any
+    future instrumentation without further driver edits.
+    """
+    tags = {}
+    for key, value in info.items():
+        if key in skip or not isinstance(value, dict):
+            continue
+        for subkey, subvalue in value.items():
+            tag_key = "{}.{}".format(key, subkey)
+            if isinstance(subvalue, (str, int, float, bool)):
+                tags[tag_key] = subvalue
+            else:
+                tags[tag_key] = jsonutils.dumps(subvalue)
+    return tags
 
 
 class OTLP(base.Driver):
@@ -71,7 +93,11 @@ class OTLP(base.Driver):
             SimpleSpanProcessor(exporter))
         # pf9 end
 
-        self.spans = collections.deque()
+        # pf9 start: keyed by trace_id (not a LIFO stack) so concurrent
+        # non-nested requests sharing this singleton driver cannot pop
+        # each other's spans
+        self.spans = {}
+        # pf9 end
 
     def _get_service_name(self, conf, project, service):
         prefix = conf.profiler_otlp.service_name_prefix
@@ -101,7 +127,7 @@ class OTLP(base.Driver):
         elif info.get("requests"):
             return "REQUESTS_{}_{}".format(
                 info["requests"]["method"], info["requests"]["hostname"])
-        return payload["name"].rstrip("-start")
+        return payload["name"][:-len("-start")]
 
     def notify(self, payload):
         if payload["name"].endswith("start"):
@@ -132,9 +158,17 @@ class OTLP(base.Driver):
                 trace_flags=span.context.trace_flags,
                 trace_state=span.context.trace_state)
 
-            self.spans.append(span)
+            self.spans[payload["trace_id"]] = span
         else:
-            span = self.spans.pop()
+            # pf9 start: stop without a matching start must never raise
+            # into the traced service's request path
+            span = self.spans.pop(payload["trace_id"], None)
+            if span is None:
+                LOG.warning(
+                    "No matching start span for trace_id %s, dropping "
+                    "stop payload", payload["trace_id"])
+                return
+            # pf9 end
 
             # Store result of db call and function call
             for call in ("db", "function"):
@@ -145,6 +179,15 @@ class OTLP(base.Driver):
             if payload.get("info", {}).get("requests"):
                 span.set_attribute(
                     "status_code", payload["info"]["requests"]["status_code"])
+            # pf9 start: a policy decision (or other data) is only known at
+            # stop time, so merge any remaining namespaces here too
+            stop_tags = _flatten_namespace_tags(
+                payload.get("info", {}),
+                skip=("db", "function", "requests", "etype", "message",
+                      "host"))
+            for tag_key, tag_value in stop_tags.items():
+                span.set_attribute(tag_key, tag_value)
+            # pf9 end
             # pf9 start: Set span status and error info
             if payload["info"].get("etype"):
                 span.set_attribute("error", True)
@@ -205,5 +248,10 @@ class OTLP(base.Driver):
             if "kwargs" in info["function"]:
                 tags["kwargs"] = info["function"]["kwargs"]
             tags["name"] = info["function"]["name"]
+        else:
+            # pf9 start: generic passthrough for any other namespace so
+            # future instrumentation needs no further driver edits
+            tags.update(_flatten_namespace_tags(info, skip=("host",)))
+            # pf9 end
 
         return tags

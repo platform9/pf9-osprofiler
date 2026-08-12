@@ -13,9 +13,26 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
+import json
+import logging
+
 from osprofiler import notifier
 from osprofiler import requests
 from osprofiler import web
+
+LOG = logging.getLogger(__name__)
+
+
+# pf9 start: tee every payload to the log so a policy decision known only
+# at stop time is visible without a separate trace backend
+def _log_and_notify(real_notifier, payload):
+    try:
+        LOG.info("osprofiler_trace %s", json.dumps(payload, default=str))
+    except Exception:
+        LOG.exception("Failed to log osprofiler payload")
+    real_notifier(payload)
+# pf9 end
 
 
 def init_from_conf(conf, context, project, service, host, **kwargs):
@@ -38,7 +55,7 @@ def init_from_conf(conf, context, project, service, host, **kwargs):
         host=host,
         conf=conf,
         **kwargs)
-    notifier.set(_notifier)
+    notifier.set(functools.partial(_log_and_notify, _notifier))
     web.enable(hmac_keys=conf.profiler.hmac_keys)
     if conf.profiler.trace_requests:
         requests.enable()
