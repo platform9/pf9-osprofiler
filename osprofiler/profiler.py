@@ -154,8 +154,10 @@ def trace(name, info=None, hide_args=False, hide_result=True,
                 info_["function"]["kwargs"] = str(kwargs)
 
             stop_info = None
+            # pf9 start: a failed start pushes nothing, so it must not stop
+            start(name, info=info_)
+            # pf9 end
             try:
-                start(name, info=info_)
                 result = f(*args, **kwargs)
             except Exception as ex:
                 stop_info = {
@@ -403,7 +405,14 @@ class _Profiler:
         info["host"] = self._host
         self._name.append(name)
         self._trace_stack.append(str(uuidutils.generate_uuid()))
-        self._notify("%s-start" % name, info)
+        # pf9 start: undo the push when the notifier raises
+        try:
+            self._notify("%s-start" % name, info)
+        except BaseException:
+            self._name.pop()
+            self._trace_stack.pop()
+            raise
+        # pf9 end
 
     def stop(self, info=None):
         """Finish latest event.

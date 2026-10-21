@@ -82,3 +82,29 @@ class OTLPTestCase(test.TestCase):
     def test_process_tags(self):
         # Need to be implemented.
         pass
+
+    def test_create_span_tags_rbac(self):
+        payload = {"info": {"rbac": {"rule": "os_compute_api:servers:index",
+                                     "roles": ["member", "reader"],
+                                     "shadow": False,
+                                     "domain_id": None}}}
+        self.assertEqual({"rbac.rule": "os_compute_api:servers:index",
+                          "rbac.roles": ["member", "reader"],
+                          "rbac.shadow": False},
+                         self.driver.create_span_tags(payload))
+
+    def test_create_span_tags_rbac_with_function(self):
+        payload = {"info": {"function": {"name": "f"},
+                            "rbac": {"rule": "os_compute_api:servers:index"}}}
+        self.assertEqual({"name": "f",
+                          "rbac.rule": "os_compute_api:servers:index"},
+                         self.driver.create_span_tags(payload))
+
+    def test_notify_stop_sets_rbac_decision(self):
+        self.driver.notify(self.payload_start)
+        span = self.driver.spans[0]
+        span.set_attributes = mock.MagicMock()
+        span.end = mock.MagicMock()
+        self.driver.notify(dict(self.payload_stop,
+                                info={"rbac": {"decision": "deny"}}))
+        span.set_attributes.assert_called_once_with({"rbac.decision": "deny"})

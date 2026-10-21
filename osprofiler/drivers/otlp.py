@@ -145,6 +145,10 @@ class OTLP(base.Driver):
             if payload.get("info", {}).get("requests"):
                 span.set_attribute(
                     "status_code", payload["info"]["requests"]["status_code"])
+            # pf9 start: rbac fields set at stop, such as the decision
+            if payload["info"].get("rbac"):
+                span.set_attributes(self.create_span_tags(payload))
+            # pf9 end
             # pf9 start: Set span status and error info
             if payload["info"].get("etype"):
                 span.set_attribute("error", True)
@@ -205,5 +209,10 @@ class OTLP(base.Driver):
             if "kwargs" in info["function"]:
                 tags["kwargs"] = info["function"]["kwargs"]
             tags["name"] = info["function"]["name"]
+        # pf9 start: rbac fields as rbac.<key> attributes
+        if info.get("rbac"):
+            tags.update({"rbac." + k: v for k, v in info["rbac"].items()
+                         if v is not None})
+        # pf9 end
 
         return tags
