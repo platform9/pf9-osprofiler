@@ -210,7 +210,7 @@ class OTLP(base.Driver):
                 tags["kwargs"] = info["function"]["kwargs"]
             tags["name"] = info["function"]["name"]
         # pf9 start: rbac fields as rbac.<key> attributes
-        elif info.get("rbac"):
+        if info.get("rbac"):
             tags.update({"rbac." + k: v for k, v in info["rbac"].items()
                          if v is not None})
         # pf9 end

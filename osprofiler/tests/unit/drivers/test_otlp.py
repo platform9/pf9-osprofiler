@@ -93,6 +93,13 @@ class OTLPTestCase(test.TestCase):
                           "rbac.shadow": False},
                          self.driver.create_span_tags(payload))
 
+    def test_create_span_tags_rbac_with_function(self):
+        payload = {"info": {"function": {"name": "f"},
+                            "rbac": {"rule": "os_compute_api:servers:index"}}}
+        self.assertEqual({"name": "f",
+                          "rbac.rule": "os_compute_api:servers:index"},
+                         self.driver.create_span_tags(payload))
+
     def test_notify_stop_sets_rbac_decision(self):
         self.driver.notify(self.payload_start)
         span = self.driver.spans[0]
