@@ -149,6 +149,14 @@ class ProfilerTestCase(test.TestCase):
         self.assertEqual(len(prof._name), 0)
         self.assertEqual(prof._trace_stack, collections.deque(["1", "2"]))
 
+    @mock.patch("osprofiler.profiler.notifier.notify")
+    def test_profiler_start_notify_fails(self, mock_notify):
+        mock_notify.side_effect = RuntimeError("notifier down")
+        prof = profiler._Profiler("secret", base_id="1", parent_id="2")
+        self.assertRaises(RuntimeError, prof.start, "test")
+        self.assertEqual(len(prof._name), 0)
+        self.assertEqual(prof._trace_stack, collections.deque(["1", "2"]))
+
     def test_profiler_hmac(self):
         hmac = "secret"
         prof = profiler._Profiler(hmac, base_id="1", parent_id="2")
@@ -207,6 +215,21 @@ def trace_with_result_func(a, i=10):
 
 
 class TraceDecoratorTestCase(test.TestCase):
+
+    @mock.patch("osprofiler.profiler.notifier.notify")
+    def test_start_notify_fails(self, mock_notify):
+
+        @profiler.trace("fn")
+        def fn():
+            pass
+
+        profiler.init("secret", base_id="1", parent_id="2")
+        self.addCleanup(profiler.clean)
+        mock_notify.side_effect = RuntimeError("notifier down")
+        self.assertRaises(RuntimeError, fn)
+        mock_notify.assert_called_once()
+        self.assertEqual(collections.deque(["1", "2"]),
+                         profiler.get()._trace_stack)
 
     @mock.patch("osprofiler.profiler.stop")
     @mock.patch("osprofiler.profiler.start")
